@@ -5,3 +5,10 @@ __pycache__/
 *.d77
 *.t77
 *.wav
+
+# ローカル専用（管理対象に含めない）
+.claude/
+ClaudeMemo/
+CLAUDE.md
+CLAUDE.local.md
+*.local.md
