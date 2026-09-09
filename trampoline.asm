@@ -6,6 +6,18 @@
 ; a small .bin (48-65 B) with sentinel placeholders that the Python tool
 ; patches per chunk at T77 build time.
 ;
+; Assembling (lwasm):
+;   VARIANT selects which variant is emitted. 0 (the default) assembles all
+;   five back to back (handy for a listing); 1..5 emits exactly one, which
+;   is how the Makefile produces each .bin:
+;     lwasm --format=raw --define=VARIANT=1 -o trampoline_fwd_int.bin   trampoline.asm
+;     lwasm --format=raw --define=VARIANT=2 -o trampoline_rev_int.bin   trampoline.asm
+;     lwasm --format=raw --define=VARIANT=3 -o trampoline_fwd_last.bin  trampoline.asm
+;     lwasm --format=raw --define=VARIANT=4 -o trampoline_rev_last.bin  trampoline.asm
+;     lwasm --format=raw --define=VARIANT=5 -o trampoline_relocate2.bin trampoline.asm
+;   `make` / `make check` in the repository root do this and compare the
+;   result against the shipped .bin files.
+;
 ; Memory layout (assumed by every template):
 ;   CLEAR ,&H13FF leaves $1400-$7FFF free; we use $1400-$5FFF.
 ;     $1400-$1419   Stage 1                    (always 26 B)
@@ -19,9 +31,9 @@
 ;   STA  $FD0F       ; write -> ROM overlay OFF; $8000-$FBFF = URA RAM
 ;   LDX  #$141A      ; Stage 2 source = $1400 + 26
 ;   LDY  #$D000      ; Stage 2 lives here (URA RAM; survives chunk overwrite)
-; .l LDA ,X+ : STA ,Y+
+; l1@ LDA ,X+ : STA ,Y+
 ;   CMPX #$143x      ; one past Stage 2 source — depends on Stage 2 size
-;   BNE  .l
+;   BNE  l1@
 ;   JMP  $D000
 ;
 ; Stage 2 forms (one of):
@@ -58,111 +70,125 @@ PLACEHOLDER_M2D equ     $CAFE
 PLACEHOLDER_M2E equ     $FACE
 PLACEHOLDER_EN  equ     $D00D
 
+; Variant selector (see the header). Loop labels carry a trailing '@' so
+; lwasm scopes them to the blank-line-delimited block they appear in.
+                ifndef  VARIANT
+VARIANT         set     0
+                endc
+
 
 ; ============================================================================
 ; Variant 1: trampoline_fwd_int.bin   (forward single move, intermediate)
 ; ============================================================================
 
+                ifeq    VARIANT*(VARIANT-1)
                 org     STAGER_LOAD
 s1_fwd_int      orcc    #$50
                 lda     #$00
                 sta     ROM_PORT
                 ldx     #s2_fwd_int
                 ldy     #STAGE2
-.l              lda     ,x+
+l1@             lda     ,x+
                 sta     ,y+
                 cmpx    #s2_fwd_int_end
-                bne     .l
+                bne     l1@
                 jmp     STAGE2
 s2_fwd_int      ldx     #BUFFER
                 ldy     #PLACEHOLDER_TGT        ; <-- TARGET (fwd)
-.l              lda     ,x+
+l2@             lda     ,x+
                 sta     ,y+
                 cmpx    #BUFFER_END
-                bne     .l
+                bne     l2@
                 lda     ROM_PORT                ; read = ROM ON
                 andcc   #$AF
                 rts
 s2_fwd_int_end
+                endc
 
 
 ; ============================================================================
 ; Variant 2: trampoline_rev_int.bin   (reverse single move, intermediate)
 ; ============================================================================
 
+                ifeq    VARIANT*(VARIANT-2)
                 org     STAGER_LOAD
 s1_rev_int      orcc    #$50
                 lda     #$00
                 sta     ROM_PORT
                 ldx     #s2_rev_int
                 ldy     #STAGE2
-.l              lda     ,x+
+l1@             lda     ,x+
                 sta     ,y+
                 cmpx    #s2_rev_int_end
-                bne     .l
+                bne     l1@
                 jmp     STAGE2
 s2_rev_int      ldx     #BUFFER_END
                 ldy     #PLACEHOLDER_TGT        ; <-- TARGET + $4000 (rev)
-.l              lda     ,-x
+l2@             lda     ,-x
                 sta     ,-y
                 cmpx    #BUFFER
-                bne     .l
+                bne     l2@
                 lda     ROM_PORT
                 andcc   #$AF
                 rts
 s2_rev_int_end
+                endc
 
 
 ; ============================================================================
 ; Variant 3: trampoline_fwd_last.bin   (forward single move, last)
 ; ============================================================================
 
+                ifeq    VARIANT*(VARIANT-3)
                 org     STAGER_LOAD
 s1_fwd_last     orcc    #$50
                 lda     #$00
                 sta     ROM_PORT
                 ldx     #s2_fwd_last
                 ldy     #STAGE2
-.l              lda     ,x+
+l1@             lda     ,x+
                 sta     ,y+
                 cmpx    #s2_fwd_last_end
-                bne     .l
+                bne     l1@
                 jmp     STAGE2
 s2_fwd_last     ldx     #BUFFER
                 ldy     #PLACEHOLDER_TGT        ; <-- TARGET (fwd)
-.l              lda     ,x+
+l2@             lda     ,x+
                 sta     ,y+
                 cmpx    #BUFFER_END
-                bne     .l
+                bne     l2@
                 lds     #ENTRY_STACK
                 jmp     PLACEHOLDER_ST          ; <-- START (entry)
 s2_fwd_last_end
+                endc
 
 
 ; ============================================================================
 ; Variant 4: trampoline_rev_last.bin   (reverse single move, last)
 ; ============================================================================
 
+                ifeq    VARIANT*(VARIANT-4)
                 org     STAGER_LOAD
 s1_rev_last     orcc    #$50
                 lda     #$00
                 sta     ROM_PORT
                 ldx     #s2_rev_last
                 ldy     #STAGE2
-.l              lda     ,x+
+l1@             lda     ,x+
                 sta     ,y+
                 cmpx    #s2_rev_last_end
-                bne     .l
+                bne     l1@
                 jmp     STAGE2
 s2_rev_last     ldx     #BUFFER_END
                 ldy     #PLACEHOLDER_TGT        ; <-- TARGET + $4000 (rev)
-.l              lda     ,-x
+l2@             lda     ,-x
                 sta     ,-y
                 cmpx    #BUFFER
-                bne     .l
+                bne     l2@
                 lds     #ENTRY_STACK
                 jmp     PLACEHOLDER_ST          ; <-- START (entry)
 s2_rev_last_end
+                endc
 
 
 ; ============================================================================
@@ -174,34 +200,36 @@ s2_rev_last_end
 ;   article's "stash first, relocate in the final pass" pattern.
 ; ============================================================================
 
+                ifeq    VARIANT*(VARIANT-5)
                 org     STAGER_LOAD
 s1_relo         orcc    #$50
                 lda     #$00
                 sta     ROM_PORT
                 ldx     #s2_relo
                 ldy     #STAGE2
-.l              lda     ,x+
+l1@             lda     ,x+
                 sta     ,y+
                 cmpx    #s2_relo_end            ; Stage 2 is 39 B, so this
-                bne     .l                      ;   resolves to $1441
+                bne     l1@                      ;   resolves to $1441
                 jmp     STAGE2
 
 s2_relo                                         ; Move 1 (reverse): buffer -> target1
                 ldx     #BUFFER_END
                 ldy     #PLACEHOLDER_TGT        ; <-- M1_DST_END = TARGET1 + $4000
-.m1             lda     ,-x
+m1@             lda     ,-x
                 sta     ,-y
                 cmpx    #BUFFER
-                bne     .m1
+                bne     m1@
                                                 ; Move 2 (forward): stash -> target0
                 ldx     #PLACEHOLDER_ST         ; <-- M2_SRC = stash address
                 ldy     #PLACEHOLDER_M2D        ; <-- M2_DST = TARGET0
-.m2             lda     ,x+
+m2@             lda     ,x+
                 sta     ,y+
                 cmpx    #PLACEHOLDER_M2E        ; <-- M2_SRC_END = stash + $4000
-                bne     .m2
+                bne     m2@
                 lds     #ENTRY_STACK
                 jmp     PLACEHOLDER_EN          ; <-- ENTRY (start address)
 s2_relo_end
+                endc
 
                 end

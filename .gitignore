@@ -12,3 +12,7 @@ ClaudeMemo/
 CLAUDE.md
 CLAUDE.local.md
 *.local.md
+
+# 生成物 (make / tests)
+build/
+tests/out/
