@@ -4,10 +4,15 @@ D77 ディスクイメージとエントリアドレスを渡すと、BIN を 16
 
 「`LOADM` だけでは直接届かない領域 (`$8000+` を含む 32 KiB プログラム等) を、`LOADM` を多段に組んで配置する」というパズルを自動で解く。
 
+## 位置づけ
+
+- [FM7BaseCode](https://github.com/7032JP/FM7BaseCode) (C + アセンブラのゲーム開発テンプレート) などで作った `.d77` を、実機へテープ経由で送り込むワークフローの終端に置くツール。生成した T77 はブラウザ版シミュレータ [WebM7](https://github.com/7032/WebM7) の CMT 入力で実機に流す前に試せる。F-BASIC 側の編集には VS Code 拡張 [FB3M7](https://github.com/7032/FB3M7) がある
+- **クリーンルーム実装**。トランポリン ([trampoline.asm](https://github.com/7032/D77TOT77WAV/blob/main/trampoline.asm)) と変換スクリプトは、公開されている FM-7 の仕様資料と自前の検証だけを根拠に書き起こしたもので、他のエミュレータのソースコードを参照・流用していない。富士通の ROM コードも含まない
+
 ## 前準備
 
 - Python3 (3.8 以降) が動作する環境を整えておく (WSL2, macOS, Linux など)
-- 6809 アセンブラ ([lwasm](http://www.lwtools.ca/) など) は **不要**。すでにアセンブル済みのトランポリン `.bin` 5 つを同梱しているので、そのまま Python から読み込んで使う
+- 6809 アセンブラ ([lwasm](http://www.lwtools.ca/) など) は **不要**。すでにアセンブル済みのトランポリン `.bin` 5 つを同梱しているので、そのまま Python から読み込んで使う (`.bin` を自分で組み直したい場合だけ lwasm が要る。[開発者向け](#開発者向け-テストと-bin-の再生成) を参照)
 
 ## 必要なファイル
 
@@ -167,7 +172,7 @@ Stage 1 は全バリアント共通の形 (`CMPX` の immediate だけ Stage 2 �
 - target ≤ `$2000`: 順方向 (`,X+` / `,Y+`)
 - target > `$2000`: 逆方向 (`,-X` / `,-Y`)
 
-ソースは [trampoline.asm](https://github.com/7032/D77TOT77WAV/blob/main/trampoline.asm) を参照。lwasm 等で組み直すと上記 5 つの `.bin` が再現できる構成になっている。
+ソースは [trampoline.asm](https://github.com/7032/D77TOT77WAV/blob/main/trampoline.asm) を参照。lwasm で組み直すと上記 5 つの `.bin` がバイト単位で再現できる (`make check` で確認できる。[開発者向け](#開発者向け-テストと-bin-の再生成) を参照)。
 
 ### センチネル
 
@@ -233,6 +238,31 @@ SIMPLE pattern が N に依存しないので、高位チャンクから順に�
 - 無音区間は DC center (`0x00`) を `--silence` 秒分埋める
 
 ---
+
+## 開発者向け: テストと .bin の再生成
+
+### テスト
+
+```sh
+python3 -m unittest discover -s tests -v     # または tests/run.sh, make test
+```
+
+- Python 3.8 以降だけで動く (アセンブラ不要)
+- [tests/make_fixtures.py](https://github.com/7032/D77TOT77WAV/blob/main/tests/make_fixtures.py) が自作の小さな D77 を `tests/out/` に生成する。市販ソフトのディスクイメージは含まない
+- N=1 / N=2 SIMPLE / N=2 ARTICLE / N≥3 の 4 ケースについて、パス構成・手順 TXT (`tests/expected/*.txt` と diff)・T77 と WAV (`tests/expected/*.sha256` と SHA-256 比較)・WAV ヘッダ (44.1 kHz / 16-bit / mono) を確認する
+- 出力を意図的に変えたときは `UPDATE_EXPECTED=1 tests/run.sh` で期待値を書き換える
+
+### `.bin` の再生成
+
+```sh
+make            # build/ に 5 つの .bin を組み立て、同梱 .bin と cmp で比較する (= make check)
+make regen      # 再生成物で同梱 .bin を置き換える
+make clean
+```
+
+- アセンブラは [lwtools](http://www.lwtools.ca/) の lwasm (4.x)。別の場所にある場合は `make LWASM=/path/to/lwasm`
+- lwasm が無い環境では lwtools のソースを取得して `make && make install` (`PREFIX=$HOME/.local` などを付けると管理者権限なしで入る)
+- `trampoline.asm` は `--define=VARIANT=1..5` で 1 バリアントずつ raw 出力する構成。指定なしで組むと 5 つが順に並んだ 259 バイトになる (リスト出力の確認用)
 
 ## D77 / T77 関連リンク
 
