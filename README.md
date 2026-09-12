@@ -6,7 +6,7 @@ D77 ディスクイメージとエントリアドレスを渡すと、BIN を 16
 
 ## 位置づけ
 
-- [FM7BaseCode](https://github.com/7032JP/FM7BaseCode) (C + アセンブラのゲーム開発テンプレート) などで作った `.d77` を、実機へテープ経由で送り込むワークフローの終端に置くツール。生成した T77 はブラウザ版シミュレータ [WebM7](https://github.com/7032/WebM7) の CMT 入力で実機に流す前に試せる。F-BASIC 側の編集には VS Code 拡張 [FB3M7](https://github.com/7032/FB3M7) がある
+- [FM7BaseCode](https://github.com/7032JP/FM7BaseCode) (C + アセンブラのゲーム開発テンプレート) などで作った `.d77` を、実機へテープ経由で送り込むワークフローの終端に置くツール。生成した T77 はブラウザ版シミュレータ [WebM7](https://github.com/7032/WebM7) の CMT 入力で実機に流す前に試せる。F-BASIC 側の編集には VS Code 拡張 [FB3M7](https://github.com/7032JP/FB3M7) がある
 - **クリーンルーム実装**。トランポリン ([trampoline.asm](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline.asm)) と変換スクリプトは、公開されている FM-7 の仕様資料と自前の検証だけを根拠に書き起こしたもので、他のエミュレータのソースコードを参照・流用していない。富士通の ROM コードも含まない
 
 ## 前準備
