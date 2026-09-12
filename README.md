@@ -7,7 +7,7 @@ D77 ディスクイメージとエントリアドレスを渡すと、BIN を 16
 ## 位置づけ
 
 - [FM7BaseCode](https://github.com/7032JP/FM7BaseCode) (C + アセンブラのゲーム開発テンプレート) などで作った `.d77` を、実機へテープ経由で送り込むワークフローの終端に置くツール。生成した T77 はブラウザ版シミュレータ [WebM7](https://github.com/7032/WebM7) の CMT 入力で実機に流す前に試せる。F-BASIC 側の編集には VS Code 拡張 [FB3M7](https://github.com/7032/FB3M7) がある
-- **クリーンルーム実装**。トランポリン ([trampoline.asm](https://github.com/7032/D77TOT77WAV/blob/main/trampoline.asm)) と変換スクリプトは、公開されている FM-7 の仕様資料と自前の検証だけを根拠に書き起こしたもので、他のエミュレータのソースコードを参照・流用していない。富士通の ROM コードも含まない
+- **クリーンルーム実装**。トランポリン ([trampoline.asm](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline.asm)) と変換スクリプトは、公開されている FM-7 の仕様資料と自前の検証だけを根拠に書き起こしたもので、他のエミュレータのソースコードを参照・流用していない。富士通の ROM コードも含まない
 
 ## 前準備
 
@@ -20,12 +20,12 @@ D77 ディスクイメージとエントリアドレスを渡すと、BIN を 16
 
 | ファイル | 内容 |
 |---|---|
-| [d77_to_t77_chunks.py](https://github.com/7032/D77TOT77WAV/blob/main/d77_to_t77_chunks.py) | 変換スクリプト本体 |
-| [trampoline_fwd_int.bin](https://github.com/7032/D77TOT77WAV/blob/main/trampoline_fwd_int.bin) | forward 中間トランポリン (48 B) |
-| [trampoline_rev_int.bin](https://github.com/7032/D77TOT77WAV/blob/main/trampoline_rev_int.bin) | reverse 中間トランポリン (48 B) |
-| [trampoline_fwd_last.bin](https://github.com/7032/D77TOT77WAV/blob/main/trampoline_fwd_last.bin) | forward 最終トランポリン (49 B) |
-| [trampoline_rev_last.bin](https://github.com/7032/D77TOT77WAV/blob/main/trampoline_rev_last.bin) | reverse 最終トランポリン (49 B) |
-| [trampoline_relocate2.bin](https://github.com/7032/D77TOT77WAV/blob/main/trampoline_relocate2.bin) | 2-move relocator (65 B) |
+| [d77_to_t77_chunks.py](https://github.com/7032JP/D77TOT77WAV/blob/main/d77_to_t77_chunks.py) | 変換スクリプト本体 |
+| [trampoline_fwd_int.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_fwd_int.bin) | forward 中間トランポリン (48 B) |
+| [trampoline_rev_int.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_rev_int.bin) | reverse 中間トランポリン (48 B) |
+| [trampoline_fwd_last.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_fwd_last.bin) | forward 最終トランポリン (49 B) |
+| [trampoline_rev_last.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_rev_last.bin) | reverse 最終トランポリン (49 B) |
+| [trampoline_relocate2.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_relocate2.bin) | 2-move relocator (65 B) |
 | `<your-game>.d77` | 入力 D77 (自分で用意する) |
 
 ## 実行
@@ -172,7 +172,7 @@ Stage 1 は全バリアント共通の形 (`CMPX` の immediate だけ Stage 2 �
 - target ≤ `$2000`: 順方向 (`,X+` / `,Y+`)
 - target > `$2000`: 逆方向 (`,-X` / `,-Y`)
 
-ソースは [trampoline.asm](https://github.com/7032/D77TOT77WAV/blob/main/trampoline.asm) を参照。lwasm で組み直すと上記 5 つの `.bin` がバイト単位で再現できる (`make check` で確認できる。[開発者向け](#開発者向け-テストと-bin-の再生成) を参照)。
+ソースは [trampoline.asm](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline.asm) を参照。lwasm で組み直すと上記 5 つの `.bin` がバイト単位で再現できる (`make check` で確認できる。[開発者向け](#開発者向け-テストと-bin-の再生成) を参照)。
 
 ### センチネル
 
@@ -248,7 +248,7 @@ python3 -m unittest discover -s tests -v     # または tests/run.sh, make test
 ```
 
 - Python 3.8 以降だけで動く (アセンブラ不要)
-- [tests/make_fixtures.py](https://github.com/7032/D77TOT77WAV/blob/main/tests/make_fixtures.py) が自作の小さな D77 を `tests/out/` に生成する。市販ソフトのディスクイメージは含まない
+- [tests/make_fixtures.py](https://github.com/7032JP/D77TOT77WAV/blob/main/tests/make_fixtures.py) が自作の小さな D77 を `tests/out/` に生成する。市販ソフトのディスクイメージは含まない
 - N=1 / N=2 SIMPLE / N=2 ARTICLE / N≥3 の 4 ケースについて、パス構成・手順 TXT (`tests/expected/*.txt` と diff)・T77 と WAV (`tests/expected/*.sha256` と SHA-256 比較)・WAV ヘッダ (44.1 kHz / 16-bit / mono) を確認する
 - 出力を意図的に変えたときは `UPDATE_EXPECTED=1 tests/run.sh` で期待値を書き換える
 
