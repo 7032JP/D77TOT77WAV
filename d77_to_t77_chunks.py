@@ -26,6 +26,9 @@ Pipeline:
 
     -> each pass is one LOADM file; concatenate as a T77 tape image
        and emit a TXT operator procedure
+    -> an ASCII-saved BASIC program (LOADER) that performs the CLEAR and
+       the LOADM ",,R" of every pass is always placed first on the tape,
+       so the operator only types RUN "CAS0:"
 
 Memory layout used by every pass:
     CLEAR ,&H13FF leaves $1400-$7FFF free for us.
@@ -291,23 +294,44 @@ def _chksum(b):
     return sum(b) & 0xFF
 
 
-def _tape_header_block(name, attr=0x02):
+# Header block data (20 bytes): file name (8), file type, ASCII flag, tape
+# file mode, 9 blank bytes. File type $02 = machine language (LOADM),
+# $00 = BASIC program; the ASCII flag / tape file mode are $FF for an
+# ASCII-saved BASIC program and $00 for a binary one.
+FILE_TYPE_ML      = 0x02
+FILE_TYPE_BASIC   = 0x00
+ASCII_FLAG_ON     = 0xFF
+ASCII_FLAG_OFF    = 0x00
+
+# Gap before each block of an ASCII-flagged file. F-BASIC stops the motor
+# after every block of an ASCII file, so the gap that precedes the next
+# block must absorb the motor spin-up; the value matches what SAVE writes
+# when the motor was off (255 x $FF).
+ASCII_GAP_LEADER_BYTES = 255
+
+
+def _tape_header_block(name, file_type=FILE_TYPE_ML, ascii_flag=ASCII_FLAG_OFF):
     sync = bytearray([0x01, 0x3C])
     content = bytearray([0x00, 0x14])
     fn = name.upper()[:8].encode('ascii').ljust(8, b' ')
     content += fn
-    content.append(attr)
-    content += bytes(11)
+    content.append(file_type)
+    content.append(ascii_flag)          # ASCII flag
+    content.append(ascii_flag)          # tape file mode (same value)
+    content += bytes(9)
     content.append(_chksum(content))
     return bytes(sync + content)
 
 
-def _tape_data_block(payload):
+def _tape_data_block(payload, pad=True):
+    """Data block. `pad=True` (machine-language files) always declares 255
+    bytes and zero-fills a short tail; `pad=False` (ASCII text) declares
+    the real length so no filler reaches the BASIC line reader."""
     sync = bytearray([0x01, 0x3C])
-    content = bytearray([0x01, 0xFF])
     chunk = bytearray(payload)
-    if len(chunk) < DATA_PAYLOAD_SIZE:
+    if pad and len(chunk) < DATA_PAYLOAD_SIZE:
         chunk += bytes(DATA_PAYLOAD_SIZE - len(chunk))
+    content = bytearray([0x01, len(chunk)])
     content += chunk
     content.append(_chksum(content))
     return bytes(sync + content)
@@ -320,27 +344,47 @@ def _tape_end_block():
     return bytes(sync + content)
 
 
-def _build_one_tape_file(loadm_bytes, name):
+def _build_one_tape_file(payload, name, ascii_basic=False):
+    """Encode one tape file. `ascii_basic=False` is a LOADM machine-language
+    file; `ascii_basic=True` is a BASIC program saved in ASCII form (what
+    SAVE "CAS0:name",A writes), which LOAD reads back."""
+    if ascii_basic:
+        header = _tape_header_block(name, FILE_TYPE_BASIC, ASCII_FLAG_ON)
+        gap = ASCII_GAP_LEADER_BYTES
+        pad = False
+    else:
+        header = _tape_header_block(name, FILE_TYPE_ML, ASCII_FLAG_OFF)
+        gap = GAP_LEADER_BYTES
+        pad = True
     hc = []
     hc += _leader(LEADER_BYTES)
-    hc += _encode_bytes(_tape_header_block(name, attr=0x02))
+    hc += _encode_bytes(header)
     pos = 0
-    while pos < len(loadm_bytes):
-        chunk = loadm_bytes[pos:pos + DATA_PAYLOAD_SIZE]
-        hc += _leader(GAP_LEADER_BYTES)
-        hc += _encode_bytes(_tape_data_block(chunk))
+    while pos < len(payload):
+        chunk = payload[pos:pos + DATA_PAYLOAD_SIZE]
+        hc += _leader(gap)
+        hc += _encode_bytes(_tape_data_block(chunk, pad=pad))
         pos += DATA_PAYLOAD_SIZE
-    hc += _leader(GAP_LEADER_BYTES)
+    hc += _leader(gap)
     hc += _encode_bytes(_tape_end_block())
     return hc
 
 
+def _file_spec(entry):
+    """Normalise a tape file entry: (name, payload) or
+    (name, payload, ascii_basic) -> (name, payload, ascii_basic)."""
+    if len(entry) == 2:
+        return entry[0], entry[1], False
+    return entry[0], entry[1], bool(entry[2])
+
+
 def build_t77(files, mark_inter_file_silence=True):
     hc = []
-    for i, (name, loadm) in enumerate(files):
+    for i, entry in enumerate(files):
+        name, payload, ascii_basic = _file_spec(entry)
         if i > 0 and mark_inter_file_silence:
             hc.append(WAV_SILENCE_MARKER)
-        hc += _build_one_tape_file(loadm, name)
+        hc += _build_one_tape_file(payload, name, ascii_basic)
         hc += _leader(64)
     hc += _leader(32)
     # T77 tape image format magic header (18 bytes, fixed).
@@ -475,10 +519,11 @@ def build_wav(files, head_silence=5.0, gap_silence=5.0, tail_silence=5.0):
     silences inserted at the head, between files, and at the tail."""
     samples = bytearray()
     samples += _silence_samples(head_silence)
-    for i, (name, loadm) in enumerate(files):
+    for i, entry in enumerate(files):
+        name, payload, ascii_basic = _file_spec(entry)
         if i > 0:
             samples += _silence_samples(gap_silence)
-        hc = _build_one_tape_file(loadm, name)
+        hc = _build_one_tape_file(payload, name, ascii_basic)
         samples += _halfcycles_to_samples(hc)
     samples += _silence_samples(tail_silence)
     return _wrap_wav(bytes(samples))
@@ -634,9 +679,39 @@ def build_pass(pass_desc, chunks):
     raise RuntimeError(f"unknown pass kind: {k}")
 
 
+# ===== BASIC loader (always the first tape file) =====
+
+LOADER_NAME = 'LOADER'
+
+
+def build_basic_loader(tape_files):
+    """Return (lines, payload) for a BASIC program that performs the whole
+    operator procedure by itself:
+
+        10 CLEAR ,&H13FF
+        20 LOADM "CAS0:",,R   (one line per pass, in tape order)
+        30 LOADM "CAS0:",,R
+
+    Every pass is started with ",,R": an intermediate trampoline ends with
+    ROM ON + RTS, which returns to the interpreter so the next line runs,
+    while the last trampoline JMPs the entry and never comes back.
+
+    `lines` is the program as text (one entry per line); `payload` is the
+    ASCII-saved form as it goes on tape: each line followed by CR only (the
+    cassette device does not emit LF), no other terminator — the end block
+    of the tape file marks the end of the text.
+    """
+    lines = [f'CLEAR ,&H{CLEAR_VALUE:04X}']
+    lines += ['LOADM "CAS0:",,R'] * len(tape_files)
+    numbered = [f'{10 * (i + 1)} {s}' for i, s in enumerate(lines)]
+    payload = ''.join(s + '\r' for s in numbered).encode('ascii')
+    return numbered, payload
+
+
 # ===== Procedure text =====
 
-def build_txt(start_addr, n_chunks, tape_files, t77_name, real_size):
+def build_txt(start_addr, n_chunks, tape_files, t77_name, real_size,
+              loader_lines):
     lines = []
     lines.append(f"=== {t77_name} ロード手順 (FM-7 F-BASIC) ===")
     lines.append("")
@@ -656,17 +731,29 @@ def build_txt(start_addr, n_chunks, tape_files, t77_name, real_size):
     lines.append("  (PC 側で D77 -> T77/WAV/TXT を変換する手順は README.TXT を参照)")
     lines.append("")
     lines.append("──────────────────────────────────────────────────")
-    lines.append(" 操作手順 (F-BASIC OK プロンプトで以下を順に入力)")
+    lines.append(" 操作手順 (F-BASIC OK プロンプトで以下を入力)")
     lines.append("──────────────────────────────────────────────────")
     lines.append("")
-    lines.append(f"  CLEAR ,&H{CLEAR_VALUE:04X}")
+    lines.append(f"  テープの先頭に BASIC ローダ ({LOADER_NAME}, アスキー形式) が")
+    lines.append("  入っている。次の 1 行だけで起動する:")
+    lines.append("")
+    lines.append("        RUN \"CAS0:\"")
+    lines.append("")
+    lines.append("  ローダの中身 (CLEAR と各パスの LOADM をプログラムが順に実行する):")
+    lines.append("")
+    for s in loader_lines:
+        lines.append(f"        {s}")
+    lines.append("")
+    lines.append("──────────────────────────────────────────────────")
+    lines.append(f" テープ構成 ({LOADER_NAME} の後に続く機械語ファイル)")
+    lines.append("──────────────────────────────────────────────────")
     lines.append("")
     for i, info in enumerate(tape_files):
         idx = f"[{i + 1}/{len(tape_files)}]"
+        line_no = 10 * (i + 2)          # loader line that LOADMs this file
         if info['is_last']:
             lines.append(f"  {idx} {info['name']}  チャンク#{info['chunk_idx']} "
-                         f"({info['variant']}, 最終)")
-            lines.append(f"        LOADM \"CAS:\",,R")
+                         f"({info['variant']}, 最終)  <- ローダ {line_no} 行目")
             if info['kind'] == 'relocate2':
                 lines.append(
                     f"        ; auto-exec で relocator が動作:")
@@ -689,17 +776,16 @@ def build_txt(start_addr, n_chunks, tape_files, t77_name, real_size):
             lines.append("")
         else:
             lines.append(f"  {idx} {info['name']}  チャンク#{info['chunk_idx']} "
-                         f"({info['variant']})")
-            lines.append(f"        LOADM \"CAS:\"")
-            lines.append(f"        EXEC &H{STAGER_LOAD_ADDR:04X}")
+                         f"({info['variant']})  <- ローダ {line_no} 行目")
             if info['kind'] == 'stash':
                 lines.append(
-                    f"        ; stager がチャンクを URA RAM (${info['target']:04X}-"
-                    f"${info['target']+CHUNK_SIZE-1:04X}) へ退避")
+                    f"        ; auto-exec で stager がチャンクを URA RAM "
+                    f"(${info['target']:04X}-${info['target']+CHUNK_SIZE-1:04X}) へ退避")
             else:
                 lines.append(
-                    f"        ; stager がチャンクを最終位置 ${info['target']:04X}-"
-                    f"${info['target']+CHUNK_SIZE-1:04X} へ配置")
+                    f"        ; auto-exec で stager がチャンクを最終位置 "
+                    f"${info['target']:04X}-${info['target']+CHUNK_SIZE-1:04X} へ配置")
+            lines.append(f"        ;   ROM ON + RTS でローダの次の行へ戻る")
             lines.append("")
     lines.append("──────────────────────────────────────────────────")
     lines.append(" 補足")
@@ -720,8 +806,13 @@ def build_txt(start_addr, n_chunks, tape_files, t77_name, real_size):
     lines.append("    実行し、中間パスなら $142D の復帰ルーチンへ JMP (そこで ROM ON")
     lines.append("    + RTS)、最終パスなら LDS + JMP entry")
     lines.append("")
-    lines.append("  - EXEC は必ず明示的にアドレスを指定すること")
-    lines.append("    (引数なし EXEC は実機で挙動が不安定)")
+    lines.append("  - 全パスを LOADM \"CAS0:\",,R で起動する。中間パスは RTS で")
+    lines.append("    BASIC へ戻るのでローダの次の行へ続き、最終パスは JMP entry で")
+    lines.append("    戻らない")
+    lines.append("")
+    lines.append(f"  - {LOADER_NAME} は SAVE \"CAS0:\",A と同じアスキー形式で記録した")
+    lines.append("    BASIC プログラム。RUN \"CAS0:\" がヘッダの属性から形式を判別して")
+    lines.append("    読み込み、そのまま実行する")
     lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -828,20 +919,27 @@ def main():
                   f'[{info["variant"]:14s}] chunk#{info["chunk_idx"]} '
                   f'-> ${info["target"]:04X}{tail}')
 
-    t77 = build_t77([(info['name'], info['loadm']) for info in tape_files],
-                    mark_inter_file_silence=not args.no_wav_silence_cue)
+    loader_lines, loader_payload = build_basic_loader(tape_files)
+    print(f'    tape[loader]  {LOADER_NAME}  [BASIC, ASCII] '
+          f'{len(loader_lines)} lines, {len(loader_payload)} bytes '
+          f'(first file on the tape)')
+    files = [(LOADER_NAME, loader_payload, True)]
+    files += [(info['name'], info['loadm'], False) for info in tape_files]
+
+    t77 = build_t77(files, mark_inter_file_silence=not args.no_wav_silence_cue)
     with open(out_t77, 'wb') as f:
         f.write(t77)
     print(f'\n[+] T77 written          -> {out_t77} ({len(t77)} bytes)')
 
     txt = build_txt(args.addr, n, tape_files,
-                    os.path.basename(out_t77), real_size)
+                    os.path.basename(out_t77), real_size,
+                    loader_lines=loader_lines)
     with open(out_txt, 'w', encoding='utf-8') as f:
         f.write(txt)
     print(f'[+] procedure written    -> {out_txt}')
 
     if not args.no_wav:
-        wav = build_wav([(info['name'], info['loadm']) for info in tape_files],
+        wav = build_wav(files,
                         head_silence=args.silence,
                         gap_silence=args.silence,
                         tail_silence=args.silence)
@@ -853,13 +951,10 @@ def main():
               f'{args.silence:.1f}s silence head/gaps/tail)')
 
     print('\n--- procedure summary ---')
-    print(f'  CLEAR ,&H{CLEAR_VALUE:04X}')
-    for i, info in enumerate(tape_files):
-        if info['is_last']:
-            print(f'  LOADM "CAS:",,R     ; tape[{i+1}] {info["variant"]}')
-        else:
-            print(f'  LOADM "CAS:"        ; tape[{i+1}] {info["variant"]}')
-            print(f'  EXEC &H{STAGER_LOAD_ADDR:04X}')
+    print(f'  RUN "CAS0:"         ; tape[loader] {LOADER_NAME}, which then runs:')
+    for i, s in enumerate(loader_lines):
+        note = f'    ; tape[{i}] {tape_files[i - 1]["variant"]}' if i else ''
+        print(f'    {s}{note}')
 
     return 0
 
