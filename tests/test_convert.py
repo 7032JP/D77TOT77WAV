@@ -190,5 +190,50 @@ class ConvertTest(unittest.TestCase):
         self._check_case('n3')
 
 
+class TrampolineBinTest(unittest.TestCase):
+    """Static checks on the shipped trampoline .bin templates.
+
+    Stage 1 copies the bytes from offset STAGE1_SIZE up to (but excluding)
+    the CMPX #imm operand to $D000 and runs them there. Anything that reads
+    $FD0F (ROM overlay ON) must NOT be inside that copied range: as soon as
+    the overlay is back on, $8000-$FBFF is the BASIC ROM, so code running at
+    $D000 can not execute its own following bytes.
+    """
+
+    STAGER_LOAD_ADDR = 0x1400
+    STAGE1_SIZE = 26
+    CMPX_IMM_OFFSET = 18          # Stage 1: ORCC LDA STA LDX LDY LDA STA -> CMPX
+    LDA_ROM_PORT = b'\xB6\xFD\x0F'   # LDA $FD0F (extended)
+    BINS = ('trampoline_fwd_int.bin', 'trampoline_rev_int.bin',
+            'trampoline_fwd_last.bin', 'trampoline_rev_last.bin',
+            'trampoline_relocate2.bin')
+
+    def _stage2_range(self, data):
+        self.assertEqual(data[self.CMPX_IMM_OFFSET], 0x8C, 'CMPX #imm expected')
+        end_addr = struct.unpack('>H', data[self.CMPX_IMM_OFFSET + 1:
+                                            self.CMPX_IMM_OFFSET + 3])[0]
+        end = end_addr - self.STAGER_LOAD_ADDR
+        self.assertGreater(end, self.STAGE1_SIZE)
+        self.assertLessEqual(end, len(data))
+        return self.STAGE1_SIZE, end
+
+    def test_rom_on_is_outside_the_copied_range(self):
+        for name in self.BINS:
+            with self.subTest(bin=name):
+                with open(os.path.join(ROOT, name), 'rb') as f:
+                    data = f.read()
+                start, end = self._stage2_range(data)
+                self.assertNotIn(self.LDA_ROM_PORT, data[start:end],
+                                 'LDA $FD0F must not run from $D000')
+                if name.endswith('_int.bin'):
+                    # Stage 2 ends with JMP to the low-RAM return routine
+                    # that is left outside the copied range.
+                    self.assertEqual(data[end - 3], 0x7E, 'JMP ext expected')
+                    ret = struct.unpack('>H', data[end - 2:end])[0]
+                    self.assertEqual(ret, self.STAGER_LOAD_ADDR + end)
+                    self.assertEqual(data[end:end + 3], self.LDA_ROM_PORT)
+                    self.assertEqual(data[end + 3:], b'\x1C\xAF\x39')
+
+
 if __name__ == '__main__':
     unittest.main()

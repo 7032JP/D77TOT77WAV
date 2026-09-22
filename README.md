@@ -6,8 +6,7 @@ D77 ディスクイメージとエントリアドレスを渡すと、BIN を 16
 
 ## 位置づけ
 
-- [FM7BaseCode](https://github.com/7032JP/FM7BaseCode) (C + アセンブラのゲーム開発テンプレート) などで作った `.d77` を、実機へテープ経由で送り込むワークフローの終端に置くツール。生成した T77 はブラウザ版シミュレータ [WebM7](https://github.com/7032/WebM7) の CMT 入力で実機に流す前に試せる。F-BASIC 側の編集には VS Code 拡張 [FB3M7](https://github.com/7032JP/FB3M7) がある
-- **クリーンルーム実装**。トランポリン ([trampoline.asm](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline.asm)) と変換スクリプトは、公開されている FM-7 の仕様資料と自前の検証だけを根拠に書き起こしたもので、他のエミュレータのソースコードを参照・流用していない。富士通の ROM コードも含まない
+- [FM7BaseCode](https://github.com/7032JP/FM7BaseCode) (C + アセンブラのゲーム開発テンプレート) などで作った `.d77` を、実機へテープ経由で送り込むワークフローの終端に置くツール。生成した T77 はブラウザで動くシミュレータ [WebM7](https://github.com/7032/WebM7) の CMT 入力で実機に流す前に試せる。F-BASIC 側の編集には VS Code 拡張 [FB3M7](https://github.com/7032JP/FB3M7) がある
 
 ## 前準備
 
@@ -21,8 +20,8 @@ D77 ディスクイメージとエントリアドレスを渡すと、BIN を 16
 | ファイル | 内容 |
 |---|---|
 | [d77_to_t77_chunks.py](https://github.com/7032JP/D77TOT77WAV/blob/main/d77_to_t77_chunks.py) | 変換スクリプト本体 |
-| [trampoline_fwd_int.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_fwd_int.bin) | forward 中間トランポリン (48 B) |
-| [trampoline_rev_int.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_rev_int.bin) | reverse 中間トランポリン (48 B) |
+| [trampoline_fwd_int.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_fwd_int.bin) | forward 中間トランポリン (51 B) |
+| [trampoline_rev_int.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_rev_int.bin) | reverse 中間トランポリン (51 B) |
 | [trampoline_fwd_last.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_fwd_last.bin) | forward 最終トランポリン (49 B) |
 | [trampoline_rev_last.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_rev_last.bin) | reverse 最終トランポリン (49 B) |
 | [trampoline_relocate2.bin](https://github.com/7032JP/D77TOT77WAV/blob/main/trampoline_relocate2.bin) | 2-move relocator (65 B) |
@@ -144,7 +143,8 @@ trim を完全に無効にして生抽出が欲しい場合は `--size` を明�
 
 ```
 $1400-$1419  Stage 1                     (26 B 固定)
-$141A-$143x  Stage 2 source              (22 / 23 / 39 B)
+$141A-$143x  Stage 2 source              (19 / 23 / 39 B)
+$142D-$1432  return routine              (6 B、中間バリアントのみ。$D000 へはコピーしない)
 $143x-$1FFF  zero padding
 $2000-$5FFF  LOADM buffer (16 KiB)       ← chunk data がここに乗る
 ```
@@ -159,13 +159,15 @@ Stage 2 を裏 RAM 側に置く理由は、後段のチャンクコピーが `$1
 
 | ファイル | サイズ | 方向 | タイプ | 使用場面 |
 |---|---|---|---|---|
-| `trampoline_fwd_int.bin` | 48 B | forward | intermediate (RTS) | SIMPLE 中間パス (target ≤ `$2000`) |
-| `trampoline_rev_int.bin` | 48 B | reverse | intermediate (RTS) | SIMPLE 中間パス (target > `$2000`) / ARTICLE の stash パス |
+| `trampoline_fwd_int.bin` | 51 B | forward | intermediate (RTS) | SIMPLE 中間パス (target ≤ `$2000`) |
+| `trampoline_rev_int.bin` | 51 B | reverse | intermediate (RTS) | SIMPLE 中間パス (target > `$2000`) / ARTICLE の stash パス |
 | `trampoline_fwd_last.bin` | 49 B | forward | last (LDS + JMP) | 1-chunk / SIMPLE 最終パス (target ≤ `$2000`) |
 | `trampoline_rev_last.bin` | 49 B | reverse | last (LDS + JMP) | 1-chunk / SIMPLE 最終パス (target > `$2000`) |
 | `trampoline_relocate2.bin` | 65 B | M1 rev + M2 fwd | last | ARTICLE 最終パス |
 
-Stage 1 は全バリアント共通の形 (`CMPX` の immediate だけ Stage 2 サイズで変わる) で、IRQ マスク → ROM overlay OFF → Stage 2 を `$D000` へコピー → JMP `$D000` を行う。Stage 2 が実際の buffer→target コピー (or 2-move relocate) を実行し、中間パスなら ROM ON + RTS、最終パスなら LDS + JMP entry で終わる。
+Stage 1 は全バリアント共通の形 (`CMPX` の immediate だけ Stage 2 サイズで変わる) で、IRQ マスク → ROM overlay OFF → Stage 2 を `$D000` へコピー → JMP `$D000` を行う。Stage 2 が実際の buffer→target コピー (or 2-move relocate) を実行し、中間パスなら `$142D` の return routine へ JMP (そこで ROM ON + RTS)、最終パスなら LDS + JMP entry で終わる。
+
+ROM オーバーレイを ON に戻す `LDA $FD0F` を Stage 2 ($D000) 側に置くことはできない。読み出した瞬間に `$8000-$FBFF` は BASIC ROM に覆われ、続く命令として取り出されるのは Stage 2 自身ではなく ROM の中身になるからである (ROM/RAM の切替とその直後の処理は、ROM に覆われない `$0000-$7FFF` のコードで行う必要がある)。そのため中間バリアントは、`$D000` へコピーされる範囲の外 (`$142D`) に置いた 6 B の return routine へ JMP で戻ってから ROM を ON にする。中間パスのコピー先は常に `$6000` 以上なので、この return routine が JMP の前に上書きされることはない。
 
 コピー方向は overlap-safe で選ぶ。
 
