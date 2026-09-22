@@ -57,11 +57,11 @@ python3 d77_to_t77_chunks.py <your-game>.d77 --addr 0x0200
 
 | ファイル | 内容 |
 |---|---|
-| `<your-game>.t77` | テープイメージ。エミュレータの CMT 入力にそのまま使える |
-| `<your-game>.wav` | 44.1 kHz / 16-bit signed / mono PCM。頭・各ファイル間・末尾に DC center 無音 (`0x00`) が挟まる。実カセットに書き戻す、エミュレータに流す、CMT 入力ジャックへ直結 — どれにも使える |
+| `<your-game>.t77` | テープイメージ。シミュレータの CMT 入力にそのまま使える |
+| `<your-game>.wav` | 44.1 kHz / 16-bit signed / mono PCM。頭・各ファイル間・末尾に DC center 無音 (`0x00`) が挟まる。実カセットに書き戻す、シミュレータに流す、CMT 入力ジャックへ直結 — どれにも使える |
 | `<your-game>.txt` | 実機上で打つコマンドとテープの構成を書いた手順書 |
 
-テープの先頭には、`CLEAR` と各パスの `LOADM` を順に行う BASIC プログラム (ファイル名 `LOADER`) がアスキー形式で入っている。実機 (or エミュレータ) 側の操作は次の 1 行だけ。
+テープの先頭には、`CLEAR` と各パスの `LOADM` を順に行う BASIC プログラム (ファイル名 `LOADER`) がアスキー形式で入っている。実機 (またはシミュレータ) 側の操作は次の 1 行だけ。
 
 ```
 RUN "CAS0:"
@@ -279,7 +279,6 @@ make clean
 ## D77 / T77 関連リンク
 
 - [D77 format spec (yas-sim / floppy_disk_shield_2d)](https://github.com/yas-sim/floppy_disk_shield_2d/blob/master/d77%20format%20spec.docx) — D77 ヘッダ・トラックオフセットテーブル・セクタ ID/データ構造を整理した仕様書。
-- [d77img — RetroPC](http://www.retropc.net/apollo/download/xm7/d77img/index.htm) — D77 を覗いたり編集したりするツール群。
 - [D77 Disk Image Viewer](http://www003.upp.so-net.ne.jp/moba/toybox/d77view/index.html) — D77 のセクタを GUI で眺めるビューア。
 - [FM7TapeImageTool (captainys)](https://github.com/captainys/FM7TapeImageTool) — 44.1 kHz の WAV を T77 化するツール。T77 が「波形の正/負位相の duration を 16-bit ずつ並べたバイナリ」である事の実装例として参考になる。
 - [Fujitsu FM-7/77 Disk Image Write-Back Utility (ysflight)](https://ysflight.in.coocan.jp/FM/D77ToRS232C_e.html) — D77 を実機へ書き戻す系のユーティリティ。
