@@ -47,6 +47,7 @@ python3 d77_to_t77_chunks.py <your-game>.d77 --addr 0x0200
 [+] plan_passes -> 2 pass(es):
     tape[1/2]  C01  [rev_int (stash)] chunk#0 -> $8200
     tape[2/2]  C02  [relocate2] chunk#1 -> $4200 (M1) + $0200 (M2) JMP $0200 LAST
+    tape[loader]  LOADER  [BASIC, ASCII] 3 lines, 57 bytes (first file on the tape)
 [+] T77 written          -> <your-game>.t77
 [+] procedure written    -> <your-game>.txt
 [+] WAV written          -> <your-game>.wav
@@ -56,20 +57,32 @@ python3 d77_to_t77_chunks.py <your-game>.d77 --addr 0x0200
 
 | ファイル | 内容 |
 |---|---|
-| `<your-game>.t77` | テープイメージ。エミュレータの CMT 入力にそのまま使える |
-| `<your-game>.wav` | 44.1 kHz / 16-bit signed / mono PCM。頭・各 LOADM 間・末尾に DC center 無音 (`0x00`) が挟まる。実カセットに書き戻す、エミュレータに流す、CMT 入力ジャックへ直結 — どれにも使える |
-| `<your-game>.txt` | 実機上で打つコマンド列を書いた手順書 |
+| `<your-game>.t77` | テープイメージ。シミュレータの CMT 入力にそのまま使える |
+| `<your-game>.wav` | 44.1 kHz / 16-bit signed / mono PCM。頭・各ファイル間・末尾に DC center 無音 (`0x00`) が挟まる。実カセットに書き戻す、シミュレータに流す、CMT 入力ジャックへ直結 — どれにも使える |
+| `<your-game>.txt` | 実機上で打つコマンドとテープの構成を書いた手順書 |
 
-`.txt` の中身は典型的にはこう (2 チャンクの例)。
+テープの先頭には、`CLEAR` と各パスの `LOADM` を順に行う BASIC プログラム (ファイル名 `LOADER`) がアスキー形式で入っている。実機 (またはシミュレータ) 側の操作は次の 1 行だけ。
 
 ```
-CLEAR ,&H13FF
-LOADM "CAS:"            ← 1 つ目の LOADM
-EXEC &H1400             ← トランポリン起動 (退避 or 中間ステージ)
-LOADM "CAS:",,R         ← 2 つ目の LOADM (auto-exec で entry へ JMP)
+RUN "CAS0:"
 ```
 
-これを実機 (or エミュレータ) で 1 行ずつ打てば、`LOADM ",,R"` の auto-exec で `<your-game>` が起動する。
+`RUN "CAS0:"` が `LOADER` を読み込んでそのまま実行し、以降の `LOADM` はプログラムが順に行う。最後の `LOADM ",,R"` の auto-exec で `<your-game>` が起動する。
+
+### ローダの中身
+
+2 チャンクならこう。行番号は 10 刻みで、パス数に応じて `LOADM "CAS0:",,R` の行が増える。
+
+```
+10 CLEAR ,&H13FF
+20 LOADM "CAS0:",,R
+30 LOADM "CAS0:",,R
+```
+
+- 全パスを `LOADM "CAS0:",,R` で起動する。中間パスのトランポリンは ROM ON + `RTS` で BASIC へ戻るのでローダの次の行へ続き、最終パスのトランポリンは `JMP entry` で戻らない。`LOADM` と `EXEC` を分ける必要はない
+- `LOADER` は `SAVE "CAS0:LOADER",A` が書くのと同じ形式 (ヘッダのファイルタイプ `$00`・アスキーフラグ `$FF`、本文は各行 + CR、末尾はエンドブロック)。`RUN "CAS0:"` はヘッダの属性で形式を判別するので、オプション指定は要らない
+- プログラム中の `CLEAR ,&H13FF` は、BASIC テキスト (`$0790` 付近から数十バイト) と文字領域より上に `$13FF` があるので通る
+- `.txt` には `RUN "CAS0:"` の操作、ローダの中身、`LOADER` の後に続く機械語ファイルの構成 (各パスが何をするか) を出す
 
 ## 使用例
 
@@ -109,7 +122,7 @@ python3 d77_to_t77_chunks.py <your-game>.d77 --addr 0x0200 -o build/game.t77 -t 
 | `-t, --txt PATH` | 操作手順 TXT 出力先 (省略時 `<src>.txt`) |
 | `-w, --wav PATH` | WAV 出力先 (省略時 `<src>.wav`) |
 | `--no-wav` | WAV 出力を抑止 |
-| `--silence S` | WAV の頭・各 LOADM 間・末尾に挟む無音秒数 (デフォルト 5.0) |
+| `--silence S` | WAV の頭・各ファイル間・末尾に挟む無音秒数 (デフォルト 5.0) |
 | `--no-wav-silence-cue` | T77 内の `0x0000` inter-file cue マーカーを省略 |
 
 ## 自動サイズ検出 (`--size` 省略時)
@@ -190,7 +203,7 @@ ROM オーバーレイを ON に戻す `LDA $FD0F` を Stage 2 ($D000) 側に置
 
 ### 配置パズル (planner)
 
-Python の `plan_passes(entry, N)` がパスを並べる。
+Python の `plan_passes(entry, N)` がパスを並べる。どのパスもローダの `LOADM "CAS0:",,R` 1 行で起動され、中間パスは `RTS` でローダの次の行へ戻る。
 
 #### N=1 (≤16 KiB)
 
@@ -202,16 +215,15 @@ Python の `plan_passes(entry, N)` がパスを並べる。
 #### N=2 SIMPLE (entry ≥ `$2000`)
 
 ```
-[pass 1]    LOADM "CAS:"   ← chunk 1 を target1 へ直接ステージ
-            EXEC &H1400
+[pass 1 ,,R] chunk 1 を target1 へ直接ステージ、ROM ON + RTS
 [pass 2 ,,R] chunk 0 を target0 へステージ + JMP entry
 ```
 
 #### N=2 ARTICLE (entry < `$2000`)
 
 ```
-[pass 1]    LOADM "CAS:"   ← chunk 0 を裏 RAM stash へ退避
-            EXEC &H1400      stash = max($8000, target1 + $4000)
+[pass 1 ,,R] chunk 0 を裏 RAM stash へ退避、ROM ON + RTS
+             stash = max($8000, target1 + $4000)
 [pass 2 ,,R] chunk 1 をバッファへロード + auto-exec relocator:
               M1 (rev): buffer  → target1
               M2 (fwd): stash   → target0 (= entry)
@@ -225,10 +237,8 @@ chunk 0 を最初に裏 RAM へ退避しておくのが肝。後段の LOADM が
 SIMPLE pattern が N に依存しないので、高位チャンクから順にステージ。最終 `,,R` で entry へ JMP。
 
 ```
-[pass 1]    LOADM "CAS:"   ← chunk N-1
-            EXEC &H1400
-[pass 2]    LOADM "CAS:"   ← chunk N-2
-            EXEC &H1400
+[pass 1 ,,R] chunk N-1 を target(N-1) へステージ、ROM ON + RTS
+[pass 2 ,,R] chunk N-2 を target(N-2) へステージ、ROM ON + RTS
 ...
 [pass N ,,R] chunk 0 を target0 へステージ + JMP entry
 ```
@@ -251,7 +261,7 @@ python3 -m unittest discover -s tests -v     # または tests/run.sh, make test
 
 - Python 3.8 以降だけで動く (アセンブラ不要)
 - [tests/make_fixtures.py](https://github.com/7032JP/D77TOT77WAV/blob/main/tests/make_fixtures.py) が自作の小さな D77 を `tests/out/` に生成する。市販ソフトのディスクイメージは含まない
-- N=1 / N=2 SIMPLE / N=2 ARTICLE / N≥3 の 4 ケースについて、パス構成・手順 TXT (`tests/expected/*.txt` と diff)・T77 と WAV (`tests/expected/*.sha256` と SHA-256 比較)・WAV ヘッダ (44.1 kHz / 16-bit / mono) を確認する
+- N=1 / N=2 SIMPLE / N=2 ARTICLE / N≥3 の 4 ケースについて、パス構成・手順 TXT (`tests/expected/*.txt` と diff)・T77 と WAV (`tests/expected/*.sha256` と SHA-256 比較)・WAV ヘッダ (44.1 kHz / 16-bit / mono) を確認する。N=2 ARTICLE では、`LOADER` がテープの先頭ファイルであること、ヘッダのファイルタイプ / アスキーフラグ、データブロックが実長であること、ローダの行の内容も検証する
 - 出力を意図的に変えたときは `UPDATE_EXPECTED=1 tests/run.sh` で期待値を書き換える
 
 ### `.bin` の再生成
@@ -269,7 +279,6 @@ make clean
 ## D77 / T77 関連リンク
 
 - [D77 format spec (yas-sim / floppy_disk_shield_2d)](https://github.com/yas-sim/floppy_disk_shield_2d/blob/master/d77%20format%20spec.docx) — D77 ヘッダ・トラックオフセットテーブル・セクタ ID/データ構造を整理した仕様書。
-- [d77img — RetroPC](http://www.retropc.net/apollo/download/xm7/d77img/index.htm) — D77 を覗いたり編集したりするツール群。
 - [D77 Disk Image Viewer](http://www003.upp.so-net.ne.jp/moba/toybox/d77view/index.html) — D77 のセクタを GUI で眺めるビューア。
 - [FM7TapeImageTool (captainys)](https://github.com/captainys/FM7TapeImageTool) — 44.1 kHz の WAV を T77 化するツール。T77 が「波形の正/負位相の duration を 16-bit ずつ並べたバイナリ」である事の実装例として参考になる。
 - [Fujitsu FM-7/77 Disk Image Write-Back Utility (ysflight)](https://ysflight.in.coocan.jp/FM/D77ToRS232C_e.html) — D77 を実機へ書き戻す系のユーティリティ。

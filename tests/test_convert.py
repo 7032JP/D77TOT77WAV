@@ -15,6 +15,8 @@ make_fixtures.py) and the outputs are compared with tests/expected/:
     <case>.sha256   SHA-256 of the T77 and the WAV (too large to check in)
 
 The WAV header is additionally validated as 44.1 kHz / 16-bit / mono PCM.
+Every tape starts with the ASCII BASIC loader (LOADER); its placement and
+encoding are checked in detail on the n2_article case.
 
 Run from the repository root:
 
@@ -167,27 +169,58 @@ class ConvertTest(unittest.TestCase):
                              'SHA-256 mismatch for ' + name)
 
     def _check_case(self, case):
-        entry = next(c for c in make_fixtures.CASES if c[0] == case)
-        _, fixture, _, addr, n_expected, variants = entry
+        _, fixture, _, addr, n_expected, variants = next(
+            c for c in make_fixtures.CASES if c[0] == case)
         stdout, t77, txt, wav = self._run_case(case, fixture, addr)
         self._check_plan(stdout, n_expected, variants)
         self._check_txt(case, txt)
         self._check_wav_header(wav)
         self._check_hashes(case, t77, wav)
+        return stdout, t77
 
-    # ---- the four cases ---------------------------------------------------
+    # ---- the cases ------------------------------------------------------
 
     def test_n1(self):
-        self._check_case('n1')
+        stdout, _ = self._check_case('n1')
+        self.assertIn('tape[loader]  LOADER  [BASIC, ASCII] 2 lines', stdout)
 
     def test_n2_simple(self):
-        self._check_case('n2_simple')
+        stdout, _ = self._check_case('n2_simple')
+        self.assertIn('tape[loader]  LOADER  [BASIC, ASCII] 3 lines', stdout)
 
     def test_n2_article(self):
-        self._check_case('n2_article')
+        stdout, t77 = self._check_case('n2_article')
+        self.assertIn('tape[loader]  LOADER  [BASIC, ASCII] 3 lines', stdout)
+        # The loader must be the first tape file: its T77 stream is a
+        # prefix of the whole image right after the 18-byte T77 header.
+        sys.path.insert(0, ROOT)
+        import d77_to_t77_chunks as conv
+        expected = ['10 CLEAR ,&H13FF',
+                    '20 LOADM "CAS0:",,R',
+                    '30 LOADM "CAS0:",,R']
+        lines, payload = conv.build_basic_loader(
+            [{'is_last': False}, {'is_last': True}])
+        self.assertEqual(lines, expected)
+        self.assertEqual(payload, ''.join(s + '\r' for s in expected).encode())
+        loader_hc = conv._build_one_tape_file(payload, conv.LOADER_NAME, True)
+        loader_bytes = b''.join(struct.pack('>H', v) for v in loader_hc)
+        with open(t77, 'rb') as f:
+            head = f.read(18 + len(loader_bytes))
+        self.assertEqual(head[18:], loader_bytes)
+        # Header block of the loader: type $00 (BASIC), ASCII flag $FF.
+        hdr = conv._tape_header_block(conv.LOADER_NAME, conv.FILE_TYPE_BASIC,
+                                      conv.ASCII_FLAG_ON)
+        self.assertEqual(hdr[2:4], b'\x00\x14')
+        self.assertEqual(hdr[4:12], b'LOADER  ')
+        self.assertEqual(hdr[12:15], b'\x00\xff\xff')
+        # ASCII data block carries the real length, not 255 padded bytes.
+        blk = conv._tape_data_block(payload, pad=False)
+        self.assertEqual(blk[2:4], bytes([0x01, len(payload)]))
+        self.assertEqual(blk[4:4 + len(payload)], payload)
 
     def test_n3(self):
-        self._check_case('n3')
+        stdout, _ = self._check_case('n3')
+        self.assertIn('tape[loader]  LOADER  [BASIC, ASCII] 4 lines', stdout)
 
 
 class TrampolineBinTest(unittest.TestCase):
