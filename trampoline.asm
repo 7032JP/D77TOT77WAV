@@ -3,7 +3,7 @@
 ; FM-7 multi-chunk LOADM trampoline templates (6809 ASM, lwasm syntax)
 ;
 ; Companion source for d77_to_t77_chunks.py. Five variants, each shipped as
-; a small .bin (48-65 B) with sentinel placeholders that the Python tool
+; a small .bin (49-65 B) with sentinel placeholders that the Python tool
 ; patches per chunk at T77 build time.
 ;
 ; Assembling (lwasm):
@@ -21,7 +21,9 @@
 ; Memory layout (assumed by every template):
 ;   CLEAR ,&H13FF leaves $1400-$7FFF free; we use $1400-$5FFF.
 ;     $1400-$1419   Stage 1                    (always 26 B)
-;     $141A-$143x   Stage 2 source             (22 / 23 / 39 B)
+;     $141A-$143x   Stage 2 source             (19 / 23 / 39 B)
+;     $142D-$1432   return routine             (6 B, "int" variants only;
+;                                               not copied to $D000)
 ;     $143x-$1FFF   zero padding
 ;     $2000-$5FFF   LOADM buffer               (16 KiB; the chunk lands here)
 ;
@@ -37,11 +39,21 @@
 ;   JMP  $D000
 ;
 ; Stage 2 forms (one of):
-;   forward single move + intermediate tail   (fwd_int.bin,  S2 = 22 B)
-;   reverse single move + intermediate tail   (rev_int.bin,  S2 = 22 B)
+;   forward single move + intermediate tail   (fwd_int.bin,  S2 = 19 B + 6 B)
+;   reverse single move + intermediate tail   (rev_int.bin,  S2 = 19 B + 6 B)
 ;   forward single move + last tail           (fwd_last.bin, S2 = 23 B)
 ;   reverse single move + last tail           (rev_last.bin, S2 = 23 B)
 ;   2-move relocator + last tail              (relocate2.bin, S2 = 39 B)
+;
+; Intermediate tail: Stage 2 ends with JMP to a 6 B return routine that
+; stays at $142D (low RAM, outside the range copied to $D000). Only that
+; routine reads $FD0F (ROM overlay ON), then ANDCC #$AF / RTS to BASIC.
+; The ROM/RAM switch and the instructions right after it must run from
+; code in $0000-$7FFF: as soon as the overlay is back on, $8000-$FBFF
+; shows the BASIC ROM, so code running at $D000 can not execute its own
+; next byte after reading $FD0F. Intermediate passes
+; only ever copy to $6000 or above, so $142D is never overwritten before
+; the JMP lands there.
 ;
 ; Sentinels (Python patches each exactly once):
 ;   $DEAD  TARGET (single-move) or M1_DST_END (relocate2)
@@ -99,10 +111,15 @@ l2@             lda     ,x+
                 sta     ,y+
                 cmpx    #BUFFER_END
                 bne     l2@
-                lda     ROM_PORT                ; read = ROM ON
+                jmp     ret_fwd_int             ; back to $0000-$7FFF first
+s2_fwd_int_end
+; Return routine. NOT copied to $D000 (it sits past s2_fwd_int_end): the
+; ROM overlay must be switched from code in $0000-$7FFF, because the
+; moment ROM comes back on, $8000-$FBFF (Stage 2's own home) is the
+; BASIC ROM, not our bytes.
+ret_fwd_int     lda     ROM_PORT                ; read = ROM ON
                 andcc   #$AF
                 rts
-s2_fwd_int_end
                 endc
 
 
@@ -128,10 +145,12 @@ l2@             lda     ,-x
                 sta     ,-y
                 cmpx    #BUFFER
                 bne     l2@
-                lda     ROM_PORT
+                jmp     ret_rev_int             ; back to $0000-$7FFF first
+s2_rev_int_end
+; Return routine, not copied to $D000 (see variant 1 for the reason).
+ret_rev_int     lda     ROM_PORT                ; read = ROM ON
                 andcc   #$AF
                 rts
-s2_rev_int_end
                 endc
 
 

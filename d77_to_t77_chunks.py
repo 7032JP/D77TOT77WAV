@@ -30,11 +30,13 @@ Pipeline:
 Memory layout used by every pass:
     CLEAR ,&H13FF leaves $1400-$7FFF free for us.
     $1400-$1419   Stage 1   (26 bytes, fixed)
-    $141A-$143x   Stage 2 source (22, 23, or 39 bytes; copied to $D000)
+    $141A-$143x   Stage 2 source (19, 23, or 39 bytes; copied to $D000)
+    $142D-$1432   return routine (6 bytes, "int" variants only; stays in
+                  low RAM so ROM-ON is switched from $0000-$7FFF code)
     $143x-$1FFF   zero padding
     $2000-$5FFF   LOADM buffer (16 KiB)
 
-Trampoline templates are shipped as five small .bin files (48-65 B each)
+Trampoline templates are shipped as five small .bin files (49-65 B each)
 with sentinel placeholders that this tool patches per pass:
     trampoline_fwd_int.bin    forward copy, intermediate (RTS)
     trampoline_rev_int.bin    reverse copy, intermediate
@@ -708,13 +710,15 @@ def build_txt(start_addr, n_chunks, tape_files, t77_name, real_size):
     lines.append("")
     lines.append("  - 各 LOADM ブロックは単一連続 ($1400-$5FFF) で構成:")
     lines.append("      $1400-$1419  Stage 1                      (26 B)")
-    lines.append("      $141A-$143x  Stage 2 source (22/23/39 B)")
+    lines.append("      $141A-$143x  Stage 2 source (19/23/39 B)")
+    lines.append("      $142D-$1432  復帰ルーチン (中間パスのみ、6 B)")
     lines.append("      $143x-$1FFF  ゼロパディング")
     lines.append("      $2000-$5FFF  16 KiB バッファ")
     lines.append("")
     lines.append("  - Stage 1 は IRQ マスク + ROM OFF + Stage 2 を $D000 (URA RAM)")
     lines.append("    へコピーして JMP $D000。Stage 2 は最終コピー(/ relocate) を")
-    lines.append("    実行し、中間パスなら ROM ON + RTS、最終パスなら LDS + JMP entry")
+    lines.append("    実行し、中間パスなら $142D の復帰ルーチンへ JMP (そこで ROM ON")
+    lines.append("    + RTS)、最終パスなら LDS + JMP entry")
     lines.append("")
     lines.append("  - EXEC は必ず明示的にアドレスを指定すること")
     lines.append("    (引数なし EXEC は実機で挙動が不安定)")
